@@ -1,0 +1,287 @@
+---
+title: "Distance Traveled by Teams"
+output: html_document
+date: "2023-10-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import data
+```{r}
+#install.packages("geodist")
+#install.packages("geosphere")
+library(readxl)
+library(geosphere)
+library(dplyr)
+library(ggmap)
+library(lubridate)
+library(writexl)
+library(stringr)
+
+# Specify the Excel file path
+excel_file_path <- "example_file_path"
+
+# List the sheet names in the Excel file
+sheet_names <- excel_sheets(excel_file_path)
+
+# Create an empty list to store the data frames
+sheet_data <- list()
+
+# Loop through each sheet and read it into a data frame
+for (sheet_name in sheet_names) {
+  df <- read_excel(excel_file_path, sheet = sheet_name)
+  
+  # Add a new column with the sheet name
+  df$SheetName <- sheet_name
+  
+  # Append the data frame to the list
+  sheet_data[[sheet_name]] <- df
+}
+
+# Import file that has majority of D1 stadiums and their latitudes and longitudes
+stadiums_geocoded <- read.csv("example_file_path")
+head(stadiums_geocoded)
+```
+
+Clean stadiums information:
+```{r}
+# Create a lookup table for state names and abbreviations
+state_abbreviations <- data.frame(
+  StateName = c(
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California",
+    "Colorado", "Connecticut", "Delaware", "Florida", "Georgia",
+    "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas",
+    "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts",
+    "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana",
+    "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico",
+    "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma",
+    "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
+    "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
+    "West Virginia", "Wisconsin", "Wyoming"
+  ),
+  Abbreviation = c(
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Define a function to convert state names to abbreviations
+convert_state <- function(state_name) {
+  abbreviation <- state_abbreviations$Abbreviation[state_abbreviations$StateName == state_name]
+  if (length(abbreviation) > 0) {
+    return(abbreviation)
+  } else {
+    return(state_name)
+  }
+}
+
+# Apply the function to the "state" column in the data frame
+stadiums_geocoded$state <- sapply(stadiums_geocoded$state, convert_state)
+
+# Add location col which combined city and state
+stadiums_geocoded$location <- paste(stadiums_geocoded$city, stadiums_geocoded$state, sep = ", ")
+
+# Only keep necessary info from stadiums
+stadium_info <- stadiums_geocoded[,c(1, 4, 10:12)]
+```
+
+## Create lats and longs for places that do not appear in stadiums information
+```{r}
+# Create a data frame with city names and coordinates that are not represented in existing df
+city_coordinates <- data.frame(
+  location = c("Carson, CA", "Las Vegas, NV", "Dallas, TX", "Santa Clara, CA", "Corpus Christi, TX", "Arlington, TX", "Bakersfield, CA", "Fullerton, CA", "Orem, UT", "Moraga, CA", "Phoenix, AZ", "Riverside, CA", "San Francisco, CA", "St. George, UT", "Surprise, AZ", "Monmouth, OR", "South Bend, IN", "Springfield, OR", "St. Paul, MN", "State College, PA", "Sterling, UT", "Twin Falls, ID", "University Place, WA", "Verona, WI", "Amherst, MA", "Burlington, VT", "Cleveland, OH", "Denver, CO", "Emmitsburg, MD", "Hempstead, NY", "Herriman, UT", "Milwaukee, WI", "Township, PA", "USAFA, CO", "Washington, DC", "West Hartford, CT", "Boise, ID", "Irvine, CA", "Purdue, IN", "Cathedral City, CA", "Clearwater, FL", "Long Beach, CA", "Oahu, Hawaii", "Palm Springs, CA", "Puerto Vallarta, MX", "Malibu, CA", "Omaha, NE", "Grand Junction, CO", "Gulf Shores, AL", "Kingsville, TX", "Manhattan Beach, CA", "Northridge, CA", "Santa Clarita, CA", "Santa Monica, CA", "Detroit, MI", "La Jolla, CA", "Oklahoma City, OK", "Fort Myers, FL", "New York, NY", "Cheney,WA", "Nassau, Bahamas", "Fayetteville, AK", "St. Charles, MO", "St. Louis, MO", "West Valley City, UT", "Anchorage, AK", "Aspen, CO", "Fairbanks, AK", "Houghton, MI", "Jackson, NH", "Lake Placid, NY", "Midway, UT", "Minturn, CO", "Red River, NM", "Steamboat Springs, CO", "Stowe, VT", "Sun Valley, ID", "West Yellowstone, MT", "Beaver Creek, CO", "Big Sky, MT", "Dillon, CO", "Francona, NH", "Girdwood, AK", "Huntsville, UT", "Nederland, CO", "Park City, UT", "Snowbasin, UT", "Snowbird, UT", "Bandon, OR", "Bremerton, WA", "Bridgeport, WV", "Cle Elum, WA", "Driggs, ID", "East Hampton, NY", "Erie, CO", "Independence, MN", "Isleworth, FL", "LaQuinta, CA", "Lihue, HI", "Monterey, CA", "Morgan Hill, CA", "Rolling Hills Estates, CA", "Santa Rosa, CA", "Scottsdale, AZ", "Simi Valley, CA", "Stockton, CA", "Tacoma, WA", "Waikoloa, HI", "Federal Way, WA", "Santa Barbara, CA", "Erin, WI"),  # City names
+  latitude = c(32.7747703, 36.1716, 32.7767, 37.3541, 27.8006, 32.7304682, 35.3733, 33.8704, 40.2794602, 37.8349, 33.448376, 33.953350, 37.7749, 37.095169, 33.630554, 44.8485, 41.69842, 44.0462, 44.954445, 40.81215, 39.1936, 42.562786, 47.219545, 42.9908, 42.3732, 44.475883, 41.505493, 39.7392, 39.703602, 40.706928, 40.514114, 43.038902, 39.9025, 38.9984, 38.9072, 41.762085, 43.618881, 33.669445, 40.43432, 33.7805, 27.972572, 33.770050, 21.4389, 33.830517, 20.6534, 34.0381, 41.257160, 39.071445, 30.246037, 27.5159, 33.881248, 34.2381, 34.3917, 34.024212, 42.3314, 32.8328, 35.4819, 26.640629, 40.7128, 47.4869, 25.0443, 36.0627, 38.788698, 38.627003, 40.6916, 61.217381, 39.191097, 64.835365, 47.1211, 44.146, 44.282345, 40.5122, 39.5879, 36.706311, 40.4850, 44.475277, 43.697662, 44.6621, 39.604225, 45.2618, 39.6303, 44.2272, 60.941982, 41.2608, 39.9614, 40.646061, 41.2006, 40.5829, 43.1190, 47.5650, 39.2865, 47.1954, 43.7231, 40.963432, 40.050262, 45.0252, 28.4845, 33.6634, 21.981112, 36.603954, 37.1305, 33.7878, 38.444660, 33.501324, 34.269447, 37.961632, 47.258728, 19.9372, 47.322323, 34.420830, 43.2208),  # Corresponding latitude values
+    longitude = c(-117.071665, -115.1391, -96.7970, -121.9552, -97.3964, -97.1147739, -119.0187, -117.9242, -111.7178679, -122.1297, -112.074036, -117.396156, -122.4194, -113.575974, -112.366669, -123.2340, -86.23382, -123.0220, -93.091301, -77.85620, -111.6924, -114.460503, -122.541610, -89.5332, -72.5199, -73.212074, -81.681290, -104.9903, -77.328995, -73.621788, -112.032997, -87.906471, -76.2363, -104.8618, -77.0369, -72.742012, -116.215019, -117.823059, -86.91849, -116.4668, -82.796745, -118.193741, -158.0001, -116.545601, -105.2253, -118.6923, -95.995102, -108.549728, -87.700821, -97.8561, -118.407211, -118.5301, -118.5426, -118.496475, -83.0458, -117.2713, -97.5084, -81.872307, -74.0060, -117.5759, -77.3504, -94.1606, -90.511764, -90.199402, -112.0011, -149.863129, -106.817535, -147.776749, -88.5694, -71.1851, -73.993774, -111.4744, -106.4307, -105.405271, -106.8317, -72.702225, -114.352829, -111.1041, -106.516518, -111.3080, -106.0434, -71.7479, -149.151138, -111.7699, -105.5108, -111.497971, -111.8614, -111.6556, -124.4084, -122.6270, -80.2562, -120.9392, -111.1111, -72.184799, -105.049980, -93.7075, -81.5227, -116.3100,  -159.371109, -121.898460, -121.6544, -118.3581, -122.720306, -111.925278, -118.781479, -121.275604, -122.465973, -155.7911, -122.312622, -119.698189, -88.3434))  # Corresponding longitude values
+
+# Look at df
+loc_info <- stadium_info[c(3:5)]
+loc_info <- loc_info[,c("location", "latitude", "longitude")]
+
+# Combine city_coordinates with original stadium info df to supplement latitude and longitude values of all locations teams traveled to
+location_lats_longs <- rbind(loc_info, city_coordinates)
+```
+
+## Begin to use package to find distance between cities traveled to
+```{r}
+fb_travel <- sheet_data[["Football"]]
+
+# Perform a left join to add latitude and longitude columns based on away location of game
+result_data <- merge(fb_travel, location_lats_longs[, c("location", "latitude", "longitude")], 
+                     by.x = "Away_Location", by.y = "location", all.x = TRUE)
+
+# Keep only relevant fields
+results_sorted <- result_data[,c("SheetName", "Team Name", "Away_Location", "latitude", "longitude", "Home", "Date", "Year")]
+
+# Print the resulting data frame
+print(results_sorted)
+
+# Define latitude and longitude of home games
+college_latitude <- 40.7649
+college_longitude <- -111.8421
+
+# Impute latitude and longitude values for home games
+df <- results_sorted %>%
+  mutate(
+    latitude = ifelse(Home == 1 & is.na(latitude), college_latitude, latitude),
+    longitude = ifelse(Home == 1 & is.na(longitude), college_longitude, longitude),
+    Away_Location = ifelse(Home == 1 & is.na(Away_Location), "City, State", Away_Location)
+  )
+
+# View the results of df
+View(df)
+
+# Define the coordinates of college
+college_coords <- data.frame(
+#  Latitude = 40.7649,  # Latitude of university
+#  Longitude = -111.8421  # Longitude of university
+#)
+
+unique(df$Away_Location)
+unique(stadium_info$location)
+```
+
+## Get latitudes and longitudes of all places teams traveled to
+```{r}
+# Define a vector of sheet names to iterate over
+sheet_names <- c("Baseball", "Football", "Lacrosse", "Womens Soccer", "Softball", "Womens VB", "Beach VB", "M BBall", "W BBall", "Gymnastics", "Nordic Ski", "Alpine Ski", "M Golf", "Swim", "Dive")
+
+# Define the default values for latitude and longitude
+college_latitude <- 40.7649
+college_longitude <- -111.8421
+
+# Initialize an empty list to store the results
+results_list <- list()
+
+# Iterate over each sheet name
+for (sheet_name in sheet_names) {
+  # Extract the data from the current sheet
+  team_travel <- sheet_data[[sheet_name]]
+  
+  # Perform a left join to add latitude and longitude columns
+  result_data <- merge(team_travel, location_lats_longs[, c("location", "latitude", "longitude")], 
+                       by.x = "Away_Location", by.y = "location", all.x = TRUE)
+  
+  # Select and rename columns as needed
+  results_sorted <- result_data[,c("SheetName", "Team Name", "Away_Location", "latitude", "longitude", "Home", "Date", "Year", "Round_Trip_Indicator")]
+  
+  # Replace missing values with default values
+  results_sorted <- results_sorted %>%
+    mutate(
+      latitude = ifelse(Home == 1 & is.na(latitude), college_latitude, latitude),
+      longitude = ifelse(Home == 1 & is.na(longitude), college_longitude, longitude),
+      Away_Location = ifelse(Home == 1 & is.na(Away_Location), "City, State", Away_Location)
+    )
+  
+  # Store the results in the list
+  results_list[[sheet_name]] <- results_sorted
+}
+
+# Access the results to make sure output is consistent with test above
+results_list["Football"]
+```
+
+```{r}
+# Combine all data frames from results_list into a single data frame
+final_data <- do.call(rbind, results_list)
+
+# Remove row names
+rownames(final_data) <- NULL
+
+# View final output
+View(final_data)
+```
+
+
+## Begin to use package to find distance between locations traveled to
+```{r}
+# Coordinates for the university
+#college_coordinates <- c(college_latitude, college_longitude)
+
+summary(final_data$latitude)
+summary(final_data$longitude)
+
+# Round latitude and longitude values to 4 decimal places
+final_data$latitude <- round(final_data$latitude, 4)
+final_data$longitude <- round(final_data$longitude, 4)
+
+# U of U coordinates
+college_coordinates <- c(-111.8421, 40.7649)
+
+# Example coordinates for sample_row and home coordinates
+sample_row <- c(-122.2507, 37.8707)  # Sample data to test package calculation
+
+# Calculate the distance
+distMeters <- distVincentySphere(sample_row, college_coordinates)
+```
+
+```{r}
+final_data_lats_longs <- final_data[, c("longitude", "latitude")]
+
+# Create a function to calculate distances
+calculate_distance <- function(row) {
+  distMeters <- distVincentySphere(row[c("longitude", "latitude")], college_coordinates)
+  return(distMeters)
+}
+
+# Apply the function to each row in your DataFrame
+final_data$Distance_To_College_Meters <- apply(final_data[, c("longitude", "latitude")], 1, calculate_distance)
+
+# Replace home games with 0 meters traveled to account for teams playing locally but not explicitly on campus
+final_data_w_miles <- final_data %>%
+  mutate(Distance_To_College_Meters = ifelse(Away_Location == "State, City", 0, Distance_To_College_Meters),
+         Distance_In_Miles_One_Way = Distance_To_College_Meters * 0.000621371, #Convert to distance in miles for one way-trip
+         Distance_In_Miles_Round_Trip = Distance_In_Miles_One_Way * 2) # Calculate round trip distance traveled in miles
+
+# View output
+View(final_data_w_miles)
+
+# Create Total_Distance_Traveled column based on whether it was round trip travel or one way
+final_data_w_miles$Total_Distance_Traveled <- ifelse(final_data_w_miles$Round_Trip_Indicator == 1, final_data_w_miles$Distance_In_Miles_Round_Trip, final_data_w_miles$Distance_In_Miles_One_Way)
+
+# Sort df
+All_College_Teams_Distances <- final_data_w_miles %>%
+  arrange(SheetName, Year)
+
+# Select columns of interest from df
+distance_traveled_by_team <- All_College_Teams_Distances[c("SheetName", "Team Name", "Away_Location", "Date", "Year", "Round_Trip_Indicator", "Distance_To_College_Meters", "Total_Distance_Traveled", "Distance_In_Miles_One_Way", "Distance_In_Miles_Round_Trip")]
+```
+
+```{r}
+# Extract month and day using regular expressions
+distance_traveled_by_team$Month <- str_match(distance_traveled_by_team$Date, "([A-Za-z]+) \\d+")[, 2]
+distance_traveled_by_team$Day <- str_match(distance_traveled_by_team$Date, "[A-Za-z]+ (\\d+)")[, 2]
+
+# Create a new column "Month_Date" in MM/DD format
+months <- c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+distance_traveled_by_team$Month_Number <- match(distance_traveled_by_team$Month, months)
+distance_traveled_by_team$Month_Date <- paste0(distance_traveled_by_team$Month_Number, "/", distance_traveled_by_team$Day)
+
+# Convert "Month_Date" to character with only month and day
+distance_traveled_by_team$Month_Date <- format(distance_traveled_by_team$Month_Date, format = "%m/%d")
+```
+
+```{r}
+# Reorder columns to desired structure
+distance_traveled_by_college_team <- distance_traveled_by_team[c("SheetName", "Team Name", "Away_Location", "Month_Date", "Year", "Round_Trip_Indicator", "Distance_To_College_Meters", "Total_Distance_Traveled", "Distance_In_Miles_One_Way", "Distance_In_Miles_Round_Trip","Date")]
+
+# Set new column names
+colnames_for_export <- c("College_Team_Name", "Oponnent_or_Competition", "Location", "Date", "Year", "Round_Trip_Indicator", "Meters_From_Campus", "Total_Distance_Traveled", "One_Way_Distance_in_Miles", "Round_Trip_Distance_in_Miles", "Date_Scraped_From_Schedule")
+
+# Rename columns
+names(distance_traveled_by_college_team) <- colnames_for_export
+
+# Convert the Date column to Date format
+distances_traveled_final <- distance_traveled_by_college_team %>%
+  mutate(Date = as.Date(Date, format = "%m/%d")) %>%
+  arrange(College_Team_Name, Year, Date) %>%
+  mutate(Date = format(Date, format = "%m-%d"))
+
+# Create output excel file
+write.csv(distances_traveled_final, "College_Teams_Distances_Traveled.csv", row.names = FALSE)
+```
